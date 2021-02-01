@@ -406,30 +406,3 @@ class WideDeep(nn.Module):
             return probs
         if self.method == "multiclass":
             return pred.data.numpy()
-
-'''
-    def get_embeddings(self, col_name):
-        """Extract the embeddings for the embedding columns.
-
-        Parameters:
-        -----------
-        col_name (str) : column we want the embedding for
-
-        Returns:
-        --------
-        embeddings_dict (dict): dictionary with the column values and the embeddings
-        """
-
-        params = list(self.named_parameters())
-        emb_layers = [p for p in params if 'emb_layer' in p[0]]
-        emb_layer  = [layer for layer in emb_layers if col_name in layer[0]][0]
-        embeddings = emb_layer[1].cpu().data.numpy()
-        col_label_encoding = self.encoding_dict[col_name]
-        inv_dict = {v:k for k,v in col_label_encoding.iteritems()}
-        embeddings_dict = {}
-        for idx,value in inv_dict.iteritems():
-            embeddings_dict[value] = embeddings[idx]
-
-        return embeddings_dict
-
-'''
