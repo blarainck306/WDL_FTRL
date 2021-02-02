@@ -312,36 +312,3 @@ class WideDeep(nn.Module):
 
 
         return train_loss_history, test_loss_history, best_loss, best_model_wts
-
-
-
-
-    def predict(self, dataset):
-        """Predict target for dataset.
-
-        Parameters:
-        ----------
-        dataset (dict): dictionary with the testing dataset -
-        X_wide_test, X_deep_test, target
-
-        Returns:
-        --------
-        array-like with the target for dataset
-        """
-
-        X_w = Variable(torch.from_numpy(dataset.wide)).float()
-        X_d = Variable(torch.from_numpy(dataset.deep))
-
-        if use_cuda:
-            X_w, X_d = X_w.cuda(), X_d.cuda()
-
-        # set the model in evaluation mode so dropout is not applied
-        net = self.eval()
-        pred = net(X_w,X_d).cpu()
-        if self.method == "regression":
-            return pred.squeeze(1).data.numpy()
-        if self.method == "logistic":
-            return (pred > 0.5).squeeze(1).data.numpy()
-        if self.method == "multiclass":
-            _, pred_cat = torch.max(pred, 1)
-            return pred_cat.data.numpy()
