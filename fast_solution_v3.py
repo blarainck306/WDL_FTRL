@@ -183,10 +183,10 @@ class ftrl_proximal(object):
         z = self.z
         w = self.w
 
-        # gradient under logloss
+        # gradient under logloss, this is because: if x_i != 0, g = (p-y)x_i= p-y
         g = p - y
 
-        # update z and n
+        # update z and n, for x_i = 0, gradient is zero, so no update for them
         for i in self._indices(x):
             sigma = (sqrt(n[i] + g * g) - sqrt(n[i])) / alpha
             z[i] += g - sigma * w[i]
