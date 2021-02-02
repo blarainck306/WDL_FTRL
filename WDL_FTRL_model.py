@@ -68,14 +68,13 @@ class WideDeep(nn.Module):
             # ----Build the deep-side hidden layers (with dropout if specified)
             input_emb_dim = np.sum([emb[2] for emb in self.embeddings_input])
             # --1st hidden layer, 1st dropout
-
             self.linear_0 = nn.Linear(input_emb_dim+len(continuous_cols), self.hidden_layers[0], bias = not  self.batch_norm)
             if self.batch_norm:
                 self.bn0 = nn.BatchNorm1d(num_features = self.hidden_layers[0])
             if self.dropout:
                 self.linear_0_drop = nn.Dropout(self.dropout[0])
 
-            # -- following hidden layer, and dropout layers (if specified)
+            # --- following hidden layer, and dropout layers (if specified)
             for i,h in enumerate(self.hidden_layers[1:],1):
                 setattr(self, 'linear_'+str(i), nn.Linear( self.hidden_layers[i-1], self.hidden_layers[i] , bias = not  self.batch_norm))
                 if self.batch_norm:
@@ -83,11 +82,11 @@ class WideDeep(nn.Module):
                 if self.dropout:
                     setattr(self, 'linear_'+str(i)+'_drop', nn.Dropout(self.dropout[i]))
 
-            # PART of FC layer for deep side only
-            self.output = nn.Linear(self.hidden_layers[-1], self.n_class)
+            # PART of FC layer for deep side only, the othre half is with "WIDE", implemented outside Pytorch
+            self.final_partial_fc = nn.Linear(self.hidden_layers[-1], self.n_class)
 
         else:
-            self.output = nn.Linear(self.wide_dim, self.n_class)
+            self.final_partial_fc = nn.Linear(self.wide_dim, self.n_class)
 
 
     def compile(self, method="logistic", optimizer="Adam", learning_rate=0.001, momentum=0.0):
@@ -164,15 +163,20 @@ class WideDeep(nn.Module):
                     x_deep = getattr(self, 'linear_'+str(i)+'_drop')(x_deep)
 
             # ==========Deep + Wide sides
-            wide_deep_input = torch.cat([x_deep, X_w.float()], 1)
-            # self.output: linear function
+            # wide_deep_input = torch.cat([x_deep, X_w.float()], 1)
+            deep_z = x_deep
+            wide_z = 3
+
+
+            
+            # self.final_partial_fc: linear function
             # self.activation: sigmoid function for binary classification
 
-            out = self.activation(self.output(wide_deep_input))
+            out = self.activation(3+ final_partial_fc(deep_z))
 
         else:
             wide_deep_input = X_w.float()
-            out = self.activation(self.output(wide_deep_input))
+            out = self.activation(self.final_partial_fc(wide_deep_input))
         return out
 
 
