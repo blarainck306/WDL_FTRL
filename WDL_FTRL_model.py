@@ -21,30 +21,6 @@ def print_time():
     current_time = time.strftime("%H:%M:%S", t)
     print(current_time)
     
-class WideDeepLoader(Dataset):
-    """Helper to facilitate loading the data to the pytorch models.
-
-    Parameters:
-    --------
-    data: namedtuple with 3 elements - (wide_input_data, deep_inp_data, target)
-    """
-    def __init__(self, data):
-
-        self.X_wide = data.wide
-        self.X_deep = data.deep
-        self.Y = data.labels
-
-    def __getitem__(self, idx):
-
-        xw = self.X_wide[idx]
-        xd = self.X_deep[idx]
-        y  = self.Y[idx]
-
-        return xw, xd, y
-
-    def __len__(self):
-        return len(self.Y)
-
 
 class WideDeep(nn.Module):
     """ Wide and Deep model. As explained in Heng-Tze Cheng et al., 2016, the
@@ -111,8 +87,8 @@ class WideDeep(nn.Module):
                 if self.dropout:
                     setattr(self, 'linear_'+str(i)+'_drop', nn.Dropout(self.dropout[i]))
 
-            # Connect the wide- and dee-side of the model to the output neuron(s)
-            self.output = nn.Linear(self.hidden_layers[-1]+self.wide_dim, self.n_class)
+            # PART of FC layer for deep side only
+            self.output = nn.Linear(self.hidden_layers[-1], self.n_class)
 
         else:
             self.output = nn.Linear(self.wide_dim, self.n_class)
