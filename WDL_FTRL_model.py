@@ -12,10 +12,6 @@ import time
 
 use_cuda = torch.cuda.is_available()
 
-from petastorm import TransformSpec
-def get_transform_spec():
-  return TransformSpec(func = None, selected_fields = ['features', 'label'])
-
 def print_time():
     t = time.localtime()
     current_time = time.strftime("%H:%M:%S", t)
@@ -349,36 +345,3 @@ class WideDeep(nn.Module):
         if self.method == "multiclass":
             _, pred_cat = torch.max(pred, 1)
             return pred_cat.data.numpy()
-
-
-    def predict_proba(self, dataset):
-        """Predict predict probability for dataset.
-        This method will only work with method logistic/multiclass
-
-        Parameters:
-        ----------
-        dataset (dict): dictionary with the testing dataset -
-        X_wide_test, X_deep_test, target
-
-        Returns:
-        --------
-        array-like with the probability for dataset.
-        """
-
-        X_w = Variable(torch.from_numpy(dataset.wide)).float()
-        X_d = Variable(torch.from_numpy(dataset.deep))
-
-        if use_cuda:
-            X_w, X_d = X_w.cuda(), X_d.cuda()
-
-        # set the model in evaluation mode so dropout is not applied
-        net = self.eval()
-        pred = net(X_w,X_d).cpu()
-        if self.method == "logistic":
-            pred = pred.squeeze(1).data.numpy()
-            probs = np.zeros([pred.shape[0],2])
-            probs[:,0] = 1-pred
-            probs[:,1] = pred
-            return probs
-        if self.method == "multiclass":
-            return pred.data.numpy()
