@@ -51,10 +51,6 @@ interaction = False     # whether to enable poly2 feature interactions
 
 # D, training/validation
 epoch = 3       # learn training data for N passes
-holdafter = 29   # data after date N (exclusive) are used as validation
-holdout = None  # use every N training instance for holdout validation
-
-
 ##############################################################################
 # class, function, generator definitions #####################################
 ##############################################################################
@@ -276,21 +272,8 @@ for e in range(epoch):
 
         # step 1, get prediction from learner
         p = learner.predict(x)
-
-        if (holdafter and date > holdafter) or (holdout and t % holdout == 0):
-            # step 2-1, calculate validation loss
-            #           we do not train with the validation data so that our
-            #           validation loss is an accurate estimation
-            #
-            # holdafter: train instances from day 1 to day N
-            #            validate with instances from day N + 1 and after
-            #
-            # holdout: validate with every N instance, train with others
-            loss += logloss(p, y)
-            count += 1
-        else:
-            # step 2-2, update learner with label (click) information
-            learner.update(x, p, y)
+        # step 2, update learner with label (click) information
+        learner.update(x, p, y)
 
     print('Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
         e, loss/count, str(datetime.now() - start)))
