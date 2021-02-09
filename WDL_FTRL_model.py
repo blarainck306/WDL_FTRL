@@ -8,8 +8,9 @@ import copy
 import time
 from math import exp,sqrt
 
-use_cuda = torch.cuda.is_available()
+from petastorm import TransformSpec
 
+use_cuda = torch.cuda.is_available()
 
 debug_mode = False
 def print_time():
@@ -17,13 +18,6 @@ def print_time():
     current_time = time.strftime("%H:%M:%S", t)
     print(current_time)
     
-def str_2_tensor(str_list):
-    splitted = str_list[0].split(',')
-    float_list = list(map(float,splitted))
-    X_deep = torch.tensor([float_list])
-    return X_deep
-
-
 
 class WideDeep(nn.Module):
     """ Wide and Deep model. As explained in Heng-Tze Cheng et al., 2016, the
@@ -57,7 +51,10 @@ class WideDeep(nn.Module):
                  batch_norm,
                  dropout,
                  n_class,
-                 D = 2**24,
+                 num_wide_features,
+                 num_deep_features,
+                 ordered_wide_cols,
+                 D,
                  interaction = False):
 
         super(WideDeep, self).__init__()
@@ -70,6 +67,9 @@ class WideDeep(nn.Module):
         self.dropout = dropout
         # self.encoding_dict = encoding_dict
         self.n_class = n_class
+        self.num_wide_features = num_wide_features
+        self.num_deep_features = num_deep_features
+        self.wide_cols = ordered_wide_cols
 
 
         # ----Build the embedding layers:  to be passed through the deep-side
@@ -141,42 +141,18 @@ class WideDeep(nn.Module):
 
         self.method = method
 
-    def data_decoder(self,row_dic):
-        '''
-        parameters:
-        ----------
-        row_dic (dictionary): from dataloder
+    def get_transform_spec(self,loader_cols):
+        return TransformSpec(func = None, selected_fields = loader_cols)
 
-        return
-        ----------
-        - X_d (2-d tensor): (batch_size, num_features)
-        - x_wide (list): (num of non-zero hashed features) a list of indices of hashed features
-        - y (1-d tensor):(batch_size)  gound truth
-        '''
-        # ---delete unuseful keys:
-        # del row_dic['id']
-        del row_dic['hour']
-        # del row_dic['date']
 
-        #--get X_d:
-        X_deep = row_dic['emb_features']
-        X_deep = str_2_tensor(X_deep) #['0.0, 1.0, 1.0']--> tensor[['0.0, 1.0, 1.0']] shape(1,3)
-        X_d = X_deep
-        del row_dic['emb_features']
-        #--get y
-        y = torch.tensor([float(row_dic['label'][0])])
-        del row_dic['label']
-        #--get x_wide
-        x_wide = []
-        for key in row_dic:
-            value = row_dic[key][0]
-            # one-hot encode everything with hash trick
-            index = abs(hash(key + '_' + value)) % self.D
-            x_wide.append(index)
+    def indexing(self,X_w):
+        X_w_indices = np.ones(X_w.shape,dtype = np.int32)
+        for i in range(X_w.shape[0]):
+            for j in range(X_w.shape[1]):
+                X_w_indices[i,j] = abs(hash(self.wide_cols[j]+'_'+ str(X_w[i,j].item()))) % self.D
+        return X_w_indices
 
-        return x_wide,X_d,y
-
-    def _indices(self, x):
+    def indices_inter(self, x):
         ''' 
         - x: a list of index of hashed features
         A helper generator that yields the indices implied by x
@@ -193,7 +169,7 @@ class WideDeep(nn.Module):
         for index in x:
             yield index
 
-    def forward_wide(self,x_wide):
+    def forward_wide(self,x_w_indices):
         '''
         x_wide: a list of index of hashed features
         z_wide (scaler): z from wide side 
@@ -212,7 +188,7 @@ class WideDeep(nn.Module):
         # wTx is the inner product of w and x
         wTx = 0.
         # iterate through all non-zero feature values:
-        for i in self._indices(x_wide):
+        for i in self.indices_inter(x_w_indices):
             sign = -1. if z[i] < 0 else 1.  # get sign of z[i]
 
             # build w on the fly using z and n, hence the name - lazy weights
@@ -234,7 +210,9 @@ class WideDeep(nn.Module):
         # return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
         return z_wide
 
-    def forward(self, x_wide, X_d):
+
+
+    def forward(self, X_w_indices, X_d,y_pred,y,training = True):
         """Implementation of the forward pass.
 
         Parameters:
@@ -282,17 +260,16 @@ class WideDeep(nn.Module):
                 x_deep = getattr(self, 'linear_'+str(i)+'_drop')(x_deep)
 
         # ==========Deep + Wide sides
-        # wide_deep_input = torch.cat([x_deep, X_w.float()], 1)
+        # deep
         deep_z = self.final_partial_fc(x_deep)
-        wide_z = self.forward_wide(x_wide) # wide_z: a scaler
-
-        # self.activation: sigmoid function for binary classification
-        if debug_mode:
-            print('deep_z:', deep_z.item())
-            print('wide_z:', wide_z)
-        out = self.activation(wide_z + deep_z)
-
-        return out
+        # wide
+        wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = deep_z.dtype, device = deep_z.device)
+        for j in range(X_w_indices.shape[0]):
+            wide_z[j] = self.forward_wide(X_w_indices[j,:])
+            y_pred[j] = self.activation(wide_z[j] + deep_z[j])
+            if training:
+                self.update(X_w_indices[j,:],y_pred[j],y[j]) # update parameters for wide side
+        return
 
     def update(self,x_wide,y_pred,y):
         '''
@@ -303,9 +280,9 @@ class WideDeep(nn.Module):
 
         parameters
         ---------
-        x_wide (list):  (batch_size,), wide-side input
-        y_pred (tensor) :(batch_size,1), prediction (probablity) from model
-        y (1-d tensor):(batch_size)  gound truth
+        x_wide (iterable):  (num_wide_features,), feature indices on wide side
+        y_pred (float) : prediction (probablity) from model
+        y (float): gound truth
 
         return
         None
@@ -327,12 +304,12 @@ class WideDeep(nn.Module):
         g = p - y
 
         # update z and n, for x_i = 0, gradient is zero, so no update for them
-        for i in self._indices(x_wide):
+        for i in self.indices_inter(x_wide):
             sigma = (sqrt(n[i] + g * g) - sqrt(n[i])) / alpha
             z[i] += g - sigma * w[i]
             n[i] += g * g
 
-    def eval_model(self, test_loader, best_loss,best_model_wts,batch_size=32):
+    def eval_model(self, converter_test, best_loss,best_model_wts,loader_cols, batch_size=32):
         '''
         This function is called  after each epoch of training on the training data. 
         This function measure the performance of the model using the dev dataset.
@@ -348,17 +325,24 @@ class WideDeep(nn.Module):
         running_num_samples = 0.0
 
         with torch.no_grad():
-            # for i, (X_wide, X_deep, target) in enumerate(test_loader):
-            for i, row_dic in enumerate(test_loader):
-                x_wide,X_d,y = self.data_decoder(row_dic)
-                if use_cuda:
-                    X_d, y = X_d.cuda(), y.cuda()
-                # forward:
-                y_pred =  self(x_wide, X_d)# x_wide: list  (batch_size), X_d: a 2-d tensor (batch_size, num_features)
-                loss = self.criterion(y_pred, y.view(-1,1))
+            with converter_test.make_torch_dataloader(batch_size = batch_size, transform_spec = self.get_transform_spec(loader_cols),num_epochs = 1,shuffle_row_groups = False, workers_count = 2) as test_loader:
+                for i, row_dic in enumerate(test_loader):
+                    # decode features
+                    X_batch = row_dic['all_features']
+                    y = row_dic['label']
+                    X_w = X_batch[:,:self.num_wide_features]
+                    X_d = X_batch[:,-self.num_deep_features:]
+                    X_w_indices = self.indexing(X_w) # X_w_indices: np.array
 
-                running_loss += loss.item() * y.size(0)
-                running_num_samples += y.size(0)
+                    if use_cuda:
+                        X_d, y = X_d.cuda(), y.cuda()
+                    # forward:
+                    y_pred = torch.empty(y.shape,dtype = y.dtype, requires_grad = False,device = y.device); 
+                    self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y)
+
+                    running_loss += loss.item() * y.size(0)
+                    running_num_samples += y.size(0)
 
         # calculating test loss on all dev dataset
         test_loss = running_loss / running_num_samples # avg loss/sample
@@ -370,7 +354,7 @@ class WideDeep(nn.Module):
         return test_loss, best_loss, best_model_wts
 
 
-    def fit(self, train_loader,best_model_wts,best_loss, test_loader,batch_interval, n_epochs = 10, batch_size = 32):
+    def fit(self, converter_train,best_model_wts, best_loss, converter_test,batch_interval,loader_cols, n_epochs, batch_size):
         """Run the model for the training set at dataset.
 
         Parameters:
@@ -383,9 +367,9 @@ class WideDeep(nn.Module):
         test_loss_history = []
 
         # evalate the model at the very beginning
-        # self.eval()
-        # test_loss, best_loss, best_model_wts = self.eval_model(test_loader, best_loss, best_model_wts,batch_size)
-        # test_loss_history.append(test_loss)
+        self.eval()
+        test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss, best_model_wts,loader_cols,batch_size)
+        test_loss_history.append(test_loss)
         
         for epoch in range(n_epochs):
             print('-----')
@@ -397,47 +381,49 @@ class WideDeep(nn.Module):
             running_loss_batch = 0
             running_total_batch=0
 
+            # petastorm loader: note rows of data will be expressed as a dictionary, with column names as the keys
+            with converter_train.make_torch_dataloader(batch_size = batch_size, transform_spec = self.get_transform_spec(loader_cols),num_epochs = 1,shuffle_row_groups = False, workers_count = 2) as train_loader:
+                for i, row_dic in enumerate(train_loader):
+                    # decode features
+                    X_batch = row_dic['all_features']
+                    y = row_dic['label']
+                    X_w = X_batch[:,:self.num_wide_features]
+                    X_d = X_batch[:,-self.num_deep_features:]
+                    X_w_indices = self.indexing(X_w) # X_w_indices: np.array
 
-            # for i, (X_wide, X_deep, target) in enumerate(train_loader):
-            for i, row_dic in enumerate(train_loader):
-                # convert string to desired data format (list and tensors)
-                x_wide,X_d,y = self.data_decoder(row_dic)
-                if use_cuda:
-                     X_d, y = X_d.cuda(), y.cuda()
+                    if use_cuda:
+                         X_d, y = X_d.cuda(), y.cuda()
 
-                self.optimizer.zero_grad()
-                # ----forward
-                y_pred =  self(x_wide, X_d)# x_wide: list  (batch_size), X_d: a 2-d tensor (batch_size, num_features)
-                if debug_mode:
-                    print('y_pred: ',y_pred.item())
-                    print('y: ', y.item())
-                loss = self.criterion(y_pred, y.view(-1,1))
-                if debug_mode:
-                    print('loss:',loss.item())
-                    print('---------')
-                    input()
-                # ----backward (calc gradients) for 'deep'
-                loss.backward()
-                
-                # ---- optimization:update gradient using gradient
-                #deep:
-                self.optimizer.step()
-                #wide: get gradient  and get ready for update for 'WIDE', the actual update for 'wide' is in function forward(), specifically forward_wide()
-                self.update(x_wide,y_pred,y)
-                #TODO 
-                # ----record 'running_total','running_correct','running_loss'
-                running_total+= y.size(0)
-                running_loss += loss.item() *  y.size(0)
+                    self.optimizer.zero_grad()
+                    # ----forward
+                    y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
+                    y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,differentiable
 
-                #----print out loss for current batch if i is multiple of batch_interval
-                running_loss_batch += loss.item() *  y.size(0)
-                running_total_batch += y.size(0)
-                if  i%batch_interval==0 and i!=0 :
-                    batches_loss = running_loss_batch/running_total_batch
-                    print("batch {}, avg loss {} per sample within batches".format(i,round(batches_loss,3)) )
-                    print_time()
-                    running_loss_batch, running_total_batch = 0,0
-                    test_loss, best_loss, best_model_wts = self.eval_model(test_loader, best_loss,best_model_wts, batch_size)
+                    self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y)
+
+                    # ----backward (calc gradients) for 'deep'
+                    loss.backward()
+                    
+                    # ---- optimization:update gradient using gradient
+                    #--deep:
+                    self.optimizer.step()
+                    #--wide: get gradient  and get ready for update for 'WIDE', the actual update for 'wide' is in function forward()
+
+                    #TODO 
+                    # ----record 'running_total','running_correct','running_loss'
+                    running_total+= y.size(0)
+                    running_loss += loss.item() *  y.size(0)
+
+                    #----print out loss for current batch if i is multiple of batch_interval
+                    running_loss_batch += loss.item() *  y.size(0)
+                    running_total_batch += y.size(0)
+                    if  i%batch_interval==0 and i!=0 :
+                        batches_loss = running_loss_batch/running_total_batch
+                        print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
+                        print_time()
+                        running_loss_batch, running_total_batch = 0,0
+                        test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
                     
             # ------print out training loss, accuracy for each epoch
             epoch_loss = running_loss / running_total
@@ -446,7 +432,7 @@ class WideDeep(nn.Module):
 
             # ------at each epoch, evaluate the trained model using the test data
             self.eval()
-            test_loss, best_loss, best_model_wts = self.eval_model(test_loader, best_loss,best_model_wts, batch_size)
+            test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
             test_loss_history.append(test_loss)
             print_time()
 
