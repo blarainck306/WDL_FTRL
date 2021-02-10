@@ -376,7 +376,7 @@ class WideDeep(nn.Module):
         test_loss_history.append(test_loss)
         
         for epoch in range(n_epochs):
-            print('-----')
+            print('======')
             self.train()
             # for epoch training performance tracking
             # running_loss = 0
@@ -420,10 +420,11 @@ class WideDeep(nn.Module):
                     #----print out loss for current batch if i is multiple of batch_interval
                     running_loss_batch += loss.item() *  y.size(0)
                     running_total_batch += y.size(0)
-                    if  i%batch_interval==0 and i!=0 :
+                    if  i%batch_interval==0 and i!=0:
+                        print('-----')
+                        print_time()
                         batches_loss = running_loss_batch/running_total_batch
                         print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
-                        print_time()
                         running_loss_batch, running_total_batch = 0,0
                         self.eval()
                         test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
