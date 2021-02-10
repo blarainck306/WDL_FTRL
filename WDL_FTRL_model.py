@@ -105,6 +105,7 @@ class WideDeep(nn.Module):
         self.n = [0.] * D
         self.z = [0.] * D
         self.w = {}
+        self.w_array = []
         self.interaction = interaction
 
         # ---feature related parameters
@@ -205,6 +206,7 @@ class WideDeep(nn.Module):
 
         # cache the current w for update stage
         self.w = w
+        self.w_array.append(w)
         z_wide = max(min(wTx, 35.), -35.)
         # bounded sigmoid function, this is the probability estimation
         # return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
@@ -212,7 +214,7 @@ class WideDeep(nn.Module):
 
 
 
-    def forward(self, X_w_indices, X_d,y_pred,y,training = True):
+    def forward(self, X_w_indices, X_d,y,training = True):
         """Implementation of the forward pass.
 
         Parameters:
@@ -264,14 +266,17 @@ class WideDeep(nn.Module):
         deep_z = self.final_partial_fc(x_deep)
         # wide
         wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = deep_z.dtype, device = deep_z.device)
+        self.w_array = []
         for j in range(X_w_indices.shape[0]):
             wide_z[j] = self.forward_wide(X_w_indices[j,:])
-            y_pred[j] = self.activation(wide_z[j] + deep_z[j])
-            if training:
-                self.update(X_w_indices[j,:],y_pred[j],y[j]) # update parameters for wide side
-        return
 
-    def update(self,x_wide,y_pred,y):
+        y_pred = self.activation(wide_z + deep_z)
+        if training:
+            for j in range(X_w_indices.shape[0]):
+                self.update(X_w_indices[j,:],y_pred[j],y[j],j) # update parameters for wide side
+        return y_pred
+
+    def update(self,x_wide,y_pred,y,j):
         '''
         update necessary states for calculating the gradients of w;
         MODIFIES:
@@ -298,7 +303,7 @@ class WideDeep(nn.Module):
         # model
         n = self.n
         z = self.z
-        w = self.w
+        w = self.w_array[j]
 
         # gradient under logloss, this is because: if x_i != 0, g = (p-y)x_i= p-y
         g = p - y
@@ -337,9 +342,8 @@ class WideDeep(nn.Module):
                     if use_cuda:
                         X_d, y = X_d.cuda(), y.cuda()
                     # forward:
-                    y_pred = torch.empty(y.shape,dtype = y.dtype, requires_grad = False,device = y.device); 
-                    self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
-                    loss = self.criterion(y_pred, y)
+                    y_pred = self(X_w_indices, X_d,y, training = False)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y.view(-1,1))
 
                     running_loss += loss.item() * y.size(0)
                     running_num_samples += y.size(0)
@@ -396,11 +400,8 @@ class WideDeep(nn.Module):
 
                     self.optimizer.zero_grad()
                     # ----forward
-                    y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
-                    y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,differentiable
-
-                    self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
-                    loss = self.criterion(y_pred, y)
+                    y_pred = self(X_w_indices, X_d,y)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y.view(-1,1))
 
                     # ----backward (calc gradients) for 'deep'
                     loss.backward()
