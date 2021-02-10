@@ -424,7 +424,9 @@ class WideDeep(nn.Module):
                         print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
                         print_time()
                         running_loss_batch, running_total_batch = 0,0
+                        self.eval()
                         test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
+                        self.train()
                     
             # ------print out training loss, accuracy for each epoch
             epoch_loss = running_loss / running_total
