@@ -377,6 +377,7 @@ class WideDeep(nn.Module):
         
         for epoch in range(n_epochs):
             print('======')
+            print_time()
             self.train()
             # for epoch training performance tracking
             # running_loss = 0
