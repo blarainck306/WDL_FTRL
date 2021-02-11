@@ -7,6 +7,7 @@ import torch.optim as optim
 import copy
 import time
 from math import exp,sqrt
+# import line_profiler
 
 from petastorm import TransformSpec
 
@@ -18,7 +19,6 @@ def print_time():
     current_time = time.strftime("%H:%M:%S", t)
     print(current_time)
     
-
 class WideDeep(nn.Module):
     """ Wide and Deep model. As explained in Heng-Tze Cheng et al., 2016, the
     model taked the wide features and the deep features after being passed through
@@ -42,7 +42,6 @@ class WideDeep(nn.Module):
     - D : similar to wide_dim, number of weights (including bias) to use for the "wide" part
     - interaction: whether to use interaction in the "wide" part
     """
-
     def __init__(self,
                  embeddings_input,
                  continuous_cols,
@@ -102,10 +101,9 @@ class WideDeep(nn.Module):
         # n: squared sum of past gradients
         # z: weights
         # w: lazy weights
-        self.n = [0.] * D
-        self.z = [0.] * D
-        self.w = {}
-        self.w_array = []
+        self.n = np.zeros(D, dtype = np.float32)
+        self.z = np.zeros(D, dtype = np.float32)
+        
         self.interaction = interaction
 
         # ---feature related parameters
@@ -145,7 +143,6 @@ class WideDeep(nn.Module):
     def get_transform_spec(self,loader_cols):
         return TransformSpec(func = None, selected_fields = loader_cols)
 
-
     def indexing(self,X_w):
         X_w_indices = np.ones(X_w.shape,dtype = np.int32)
         for i in range(X_w.shape[0]):
@@ -164,14 +161,15 @@ class WideDeep(nn.Module):
         '''
 
         # first yield index of the bias term,note hash(0)=0 in python, but assume we don't have  zero value in the the feature values for wide features.
-        yield 0
+        # yield 0 # bias introduced in deep side
 
         # then yield the normal indices
         for index in x:
             yield index
 
-    def forward_wide(self,x_w_indices):
+    def forward_wide(self,x_w_indices,j):
         '''
+        doc: this funciton calculate wide_z for a SINGLE data observation
         x_wide: a list of index of hashed features
         z_wide (scaler): z from wide side 
         '''
@@ -184,34 +182,19 @@ class WideDeep(nn.Module):
         # model
         n = self.n
         z = self.z
-        w = {}
 
-        # wTx is the inner product of w and x
-        wTx = 0.
-        # iterate through all non-zero feature values:
-        for i in self.indices_inter(x_w_indices):
-            sign = -1. if z[i] < 0 else 1.  # get sign of z[i]
-
-            # build w on the fly using z and n, hence the name - lazy weights
-            # we are doing this at prediction instead of update time is because
-            # this allows us for not storing the complete w
-            if sign * z[i] <= L1:
-                # w[i] vanishes due to L1 regularization
-                w[i] = 0.
-            else:
-                # apply prediction time L1, L2 regularization to z and get w
-                w[i] = (sign * L1 - z[i]) / ((beta + sqrt(n[i])) / alpha + L2)
-
-            wTx += w[i]
+        # ----vectorized implementation for calculating wTx 
+        z_temp = z[x_w_indices]
+        n_temp = n[x_w_indices]
+        sign_temp =np.where(z_temp<0,-1.,1.)
+        w_temp = np.where(sign_temp*z_temp<= L1,0.,(sign_temp * L1 - z_temp) / ((beta + np.sqrt(n_temp)) / alpha + L2))
+        wTx = np.sum(w_temp)
 
         # cache the current w for update stage
-        self.w = w
-        self.w_array.append(w)
-        z_wide = max(min(wTx, 35.), -35.)
-        # bounded sigmoid function, this is the probability estimation
-        # return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
-        return z_wide
+        self.w_values_array[j,:] = w_temp
 
+        z_wide = max(min(wTx, 35.), -35.)
+        return z_wide
 
 
     def forward(self, X_w_indices, X_d,y,training = True):
@@ -266,11 +249,13 @@ class WideDeep(nn.Module):
         deep_z = self.final_partial_fc(x_deep)
         # wide
         wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = deep_z.dtype, device = deep_z.device)
-        self.w_array = []
+        # iterate within a batch
         for j in range(X_w_indices.shape[0]):
-            wide_z[j] = self.forward_wide(X_w_indices[j,:])
+            wide_z[j] = self.forward_wide(X_w_indices[j,:],j)
 
         y_pred = self.activation(wide_z + deep_z)
+
+        # iterate within a batch
         if training:
             for j in range(X_w_indices.shape[0]):
                 self.update(X_w_indices[j,:],y_pred[j],y[j],j) # update parameters for wide side
@@ -303,16 +288,17 @@ class WideDeep(nn.Module):
         # model
         n = self.n
         z = self.z
-        w = self.w_array[j]
+        # w = self.w_dic_array[j]
+        w = self.w_values_array[j,:]
 
         # gradient under logloss, this is because: if x_i != 0, g = (p-y)x_i= p-y
         g = p - y
 
-        # update z and n, for x_i = 0, gradient is zero, so no update for them
-        for i in self.indices_inter(x_wide):
-            sigma = (sqrt(n[i] + g * g) - sqrt(n[i])) / alpha
-            z[i] += g - sigma * w[i]
-            n[i] += g * g
+        # ---new vectorized implementation: update z and n, for x_i = 0, gradient is zero, so no update for them
+        sigma_temp = (np.sqrt(n[x_wide] + g * g) - np.sqrt(n[x_wide]))/alpha
+        z[x_wide] += (g - sigma_temp * self.w_values_array[j,:])
+        n[x_wide] += g * g
+
 
     def eval_model(self, converter_test, best_loss,best_model_wts,loader_cols, batch_size=32):
         '''
@@ -357,7 +343,6 @@ class WideDeep(nn.Module):
         print('Current test loss: %.4f. So far best test loss: %.4f' % (test_loss,best_loss))
         return test_loss, best_loss, best_model_wts
 
-
     def fit(self, converter_train,best_model_wts, best_loss, converter_test,batch_interval,loader_cols, n_epochs, batch_size):
         """Run the model for the training set at dataset.
 
@@ -367,13 +352,14 @@ class WideDeep(nn.Module):
         - n_epochs (int)
         - batch_size (int)
         """
+        self.w_values_array = np.empty((batch_size,self.num_wide_features),dtype = np.float32) # np.array
         train_loss_history = []
         test_loss_history = []
 
         # evalate the model at the very beginning
-        self.eval()
-        test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss, best_model_wts,loader_cols,batch_size)
-        test_loss_history.append(test_loss)
+        # self.eval()
+        # test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss, best_model_wts,loader_cols,batch_size)
+        # test_loss_history.append(test_loss)
         
         for epoch in range(n_epochs):
             print('======')
