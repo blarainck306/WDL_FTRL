@@ -111,7 +111,7 @@ class WideDeep(nn.Module):
         self.final_partial_fc = nn.Linear(self.hidden_layers[-1], self.n_class)
 
 
-    def compile(self, optimizer, learning_rate, momentum, alpha, beta, L1, L2,method="logistic"):
+    def compile(self, optimizer, alpha, beta, L1, L2,method="logistic"):
         """Wrapper to set the activation, loss and the optimizer.
 
         Parameters:
@@ -124,6 +124,7 @@ class WideDeep(nn.Module):
         self.beta = beta   # smoothing parameter for adaptive learning rate#
         self.L1 = L1       # L1 regularization, larger value means more regularized
         self.L2 = L2       # L2 regularization, larger value means more regularized
+        
         if method == 'regression':
             self.activation, self.criterion = None, F.mse_loss
         if method == 'logistic': # Avazu
@@ -131,14 +132,16 @@ class WideDeep(nn.Module):
         if method == 'multiclass':
             self.activation, self.criterion = F.softmax, F.cross_entropy
 
-        if optimizer == "Adagrad":
-            self.optimizer = torch.optim.Adagrad(self.parameters(), lr=learning_rate)
-        if optimizer == "Adam":
-            self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-        if optimizer == "RMSprop":
-            self.optimizer = torch.optim.RMSprop(self.parameters(), lr=learning_rate)
-        if optimizer == "SGD":
-            self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate, momentum=momentum)
+        self.optimizer = optimizer
+
+        # if optimizer == "Adagrad":
+        #     self.optimizer = torch.optim.Adagrad(self.parameters(), lr=learning_rate)
+        # if optimizer == "Adam":
+        #     self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        # if optimizer == "RMSprop":
+        #     self.optimizer = torch.optim.RMSprop(self.parameters(), lr=learning_rate)
+        # if optimizer == "SGD":
+        #     self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate, momentum=momentum)
 
         self.method = method
 
