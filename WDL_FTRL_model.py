@@ -323,7 +323,7 @@ class WideDeep(nn.Module):
         print('Current test loss: %.4f. So far best test loss: %.4f' % (test_loss,best_loss))
         return test_loss, best_loss, best_model_wts
 
-    def fit(self, converter_train,best_model_wts, best_loss, converter_test,batch_interval,loader_cols, n_epochs, batch_size):
+    def fit(self, converter_train,best_model_wts, best_loss, converter_test,batch_interval,loader_cols, n_epochs, batch_size,shuffle_row_groups):
         """Run the model for the training set at dataset.
 
         Parameters:
@@ -354,7 +354,7 @@ class WideDeep(nn.Module):
             running_total_batch=0
 
             # petastorm loader: note rows of data will be expressed as a dictionary, with column names as the keys
-            with converter_train.make_torch_dataloader(batch_size = batch_size, transform_spec = self.get_transform_spec(loader_cols),num_epochs = 1,shuffle_row_groups = False, workers_count = 2) as train_loader:
+            with converter_train.make_torch_dataloader(batch_size = batch_size, transform_spec = self.get_transform_spec(loader_cols),num_epochs = 1,shuffle_row_groups = shuffle_row_groups, workers_count = 2) as train_loader:
                 for i, row_batch in enumerate(train_loader):
                     X_w_indices = row_batch['hashed_wide'].int()
                     X_d = row_batch['embedding_indexed'].long()
