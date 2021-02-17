@@ -238,17 +238,10 @@ class WideDeep(nn.Module):
         # deep
         deep_z = self.final_partial_fc(x_deep)
         # wide
-        wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = deep_z.dtype, device = deep_z.device)
-        # iterate over training samples within a batch
-        for j in range(X_w_indices.shape[0]):
-            wide_z[j] = self.forward_wide(X_w_indices[j,:],j)
+        wide_z = 0
 
         y_pred = self.activation(wide_z + deep_z)
 
-        # iterate within a batch
-        if training:
-            for j in range(X_w_indices.shape[0]):
-                self.update(X_w_indices[j,:],y_pred[j],y[j],j) # update parameters for wide side
         return y_pred
 
     def update(self,x_wide,y_pred,y,j):
