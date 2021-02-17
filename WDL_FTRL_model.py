@@ -86,29 +86,8 @@ class WideDeep(nn.Module):
         self.D = D
 
 
-        # ----Build the embedding layers:  to be passed through the deep-side
-        for col,val,dim in self.embeddings_input:
-            setattr(self, 'emb_layer_'+col, nn.Embedding(val, dim))
-
-        # ----Build the deep-side hidden layers (with dropout if specified)
-        input_emb_dim = np.sum([emb[2] for emb in self.embeddings_input])
-        # --1st hidden layer, 1st dropout
-        self.linear_0 = nn.Linear(input_emb_dim+len(continuous_cols), self.hidden_layers[0], bias = not  self.batch_norm)
-        if self.batch_norm:
-            self.bn0 = nn.BatchNorm1d(num_features = self.hidden_layers[0])
-        if self.dropout:
-            self.linear_0_drop = nn.Dropout(self.dropout[0])
-
-        # --- following hidden layer, and dropout layers (if specified)
-        for i,h in enumerate(self.hidden_layers[1:],1):
-            setattr(self, 'linear_'+str(i), nn.Linear( self.hidden_layers[i-1], self.hidden_layers[i] , bias = not  self.batch_norm))
-            if self.batch_norm:
-                setattr(self, 'bn_'+str(i), nn.BatchNorm1d(self.hidden_layers[i]))
-            if self.dropout:
-                setattr(self, 'linear_'+str(i)+'_drop', nn.Dropout(self.dropout[i]))
-
-        # PART of FC layer for deep side only, the othre half is with "WIDE", implemented outside Pytorch
-        self.final_partial_fc = nn.Linear(self.hidden_layers[-1], self.n_class)
+        # only one layer for deep side, for learning bias term, input to this layer is going to be zero vector
+        self.final_partial_fc = nn.Linear(1, self.n_class, bias = True)
 
 
     def compile(self, optimizer, alpha, beta, L1, L2,method="logistic"):
@@ -202,44 +181,12 @@ class WideDeep(nn.Module):
         # =========Deep Side
         # ---- get embedding concatenated with continuous features: 'deep_inp'
         # -- get embeddings for embedding features: emb (a list of embeddings, one embedding for each feature respectively)
-        emb = [getattr(self, 'emb_layer_'+col)(X_d[:,self.deep_column_idx[col]])
-               for col,_,_ in self.embeddings_input]
-       
-        # -- cont is for continuous features
-        if self.continuous_cols:
-            cont_idx = [self.deep_column_idx[col] for col in self.continuous_cols]
-            cont = [X_d[:, cont_idx].float()]
-            deep_inp = torch.cat(emb+cont, 1)
-        else:
-            deep_inp = torch.cat(emb, 1)
+        fake_input = torch.zeros((X_w_indices.shape[0],1),requires_grad = False, dtype = torch.float32)
+        deep_z = self.final_partial_fc(fake_input)
 
-        # ---- 1st hidden layer and dropout layers
-        #linear+(batch norm)+ relu
-        if not self.batch_norm:
-            x_deep = F.relu(self.linear_0(deep_inp))
-        else:
-            x_deep = F.relu(self.bn0(self.linear_0(deep_inp)))
-        # dropout
-        if self.dropout:
-            x_deep = self.linear_0_drop(x_deep)
-
-        # ---- following hidden layers and dropout layers
-        for i in range(1,len(self.hidden_layers)):
-            #linear+(batch norm)+ relu
-            if not self.batch_norm:
-                x_deep = F.relu( getattr(self, 'linear_'+str(i))(x_deep) )
-            else:
-                x_deep = F.relu( getattr(self,'bn_'+str(i))(getattr(self, 'linear_'+str(i))(x_deep) ) )
-            # dropout
-            if self.dropout:
-                x_deep = getattr(self, 'linear_'+str(i)+'_drop')(x_deep)
-
-        # ==========Deep + Wide sides
-        # deep
-        deep_z = self.final_partial_fc(x_deep)
-        # wide
-        wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = deep_z.dtype, device = deep_z.device)
-        # iterate over training samples within a batch
+        # ========= wide side 
+        wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = torch.float32, device = X_d.device)
+        #iterate over training samples within a batch
         for j in range(X_w_indices.shape[0]):
             wide_z[j] = self.forward_wide(X_w_indices[j,:],j)
 
@@ -361,7 +308,7 @@ class WideDeep(nn.Module):
             running_total_batch=0
 
             # petastorm loader: note rows of data will be expressed as a dictionary, with column names as the keys
-            with converter_train.make_torch_dataloader(batch_size = batch_size, transform_spec = self.get_transform_spec(loader_cols),num_epochs = 1,shuffle_row_groups = False, workers_count = 2) as train_loader:
+            with converter_train.make_torch_dataloader(batch_size = batch_size, transform_spec = self.get_transform_spec(loader_cols),num_epochs = 1,shuffle_row_groups = True, workers_count = 2) as train_loader:
                 for i, row_batch in enumerate(train_loader):
                     X_w_indices = row_batch['hashed_wide'].int()
                     X_d = row_batch['embedding_indexed'].long()
