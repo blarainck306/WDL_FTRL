@@ -389,7 +389,7 @@ class WideDeep(nn.Module):
                         print('-----')
                         print_time()
                         batches_loss = running_loss_batch/running_total_batch
-                        self.train_loss_history.append(test_loss)
+                        self.train_loss_history.append(batches_loss)
                         print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
                         running_loss_batch, running_total_batch = 0,0
                         self.eval()
