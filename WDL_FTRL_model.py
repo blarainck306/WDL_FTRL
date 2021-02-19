@@ -110,8 +110,24 @@ class WideDeep(nn.Module):
         # PART of FC layer for deep side only, the othre half is with "WIDE", implemented outside Pytorch
         self.final_partial_fc = nn.Linear(self.hidden_layers[-1], self.n_class)
 
+        self.activation, self.criterion = torch.sigmoid, F.binary_cross_entropy # used to use F.sigmoid
 
-    def compile(self, optimizer, alpha, beta, L1, L2,method="logistic"):
+
+    def init_train_history(self):
+        '''
+        initialize object fileds before passing training history to current model object if necessary
+        '''
+        #----training history
+        self.train_loss_history = [] # loss history since the very beginning
+
+        self.test_loss_history = []
+        self.best_test_loss_history = []
+
+        self.best_test_loss = float('inf')
+        self.best_model_wts = copy.deepcopy(self.state_dict()) # weights that got best log loss on dev set 
+
+
+    def compile(self, optimizer, alpha, beta, L1, L2):
         """Wrapper to set the activation, loss and the optimizer.
 
         Parameters:
@@ -125,13 +141,6 @@ class WideDeep(nn.Module):
         self.L1 = L1       # L1 regularization, larger value means more regularized
         self.L2 = L2       # L2 regularization, larger value means more regularized
         
-        if method == 'regression':
-            self.activation, self.criterion = None, F.mse_loss
-        if method == 'logistic': # Avazu
-            self.activation, self.criterion = torch.sigmoid, F.binary_cross_entropy # used to use F.sigmoid
-        if method == 'multiclass':
-            self.activation, self.criterion = F.softmax, F.cross_entropy
-
         self.optimizer = optimizer
 
         # if optimizer == "Adagrad":
@@ -143,7 +152,6 @@ class WideDeep(nn.Module):
         # if optimizer == "SGD":
         #     self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate, momentum=momentum)
 
-        self.method = method
 
     def get_transform_spec(self,loader_cols):
         return TransformSpec(func = None, selected_fields = loader_cols)
@@ -290,7 +298,7 @@ class WideDeep(nn.Module):
         n[x_wide] += g * g
 
 
-    def eval_model(self, converter_test, best_loss,best_model_wts,loader_cols, batch_size=32):
+    def eval_model(self, converter_test,loader_cols, batch_size=32):
         '''
         This function is called  after each epoch of training on the training data. 
         This function measure the performance of the model using the dev dataset.
@@ -299,8 +307,6 @@ class WideDeep(nn.Module):
         - test_loader
         outputs:
         - test_loss: test loss for current epoch
-        - best_loss: best loss so far
-        - best_model_wts: best model weights so far
         '''
         running_loss = 0.0
         running_num_samples = 0.0
@@ -324,13 +330,13 @@ class WideDeep(nn.Module):
         # calculating test loss on all dev dataset
         test_loss = running_loss / running_num_samples # avg loss/sample
         # update best test loss so far if necessary
-        if test_loss < best_loss:
-            best_loss = test_loss
-            best_model_wts = copy.deepcopy(self.state_dict())
-        print('Current test loss: %.4f. So far best test loss: %.4f' % (test_loss,best_loss))
-        return test_loss, best_loss, best_model_wts
+        if test_loss < self.best_test_loss:
+            self.best_test_loss = test_loss
+            self.best_model_wts = copy.deepcopy(self.state_dict())
+        print('Current test loss: %.4f. So far best test loss: %.4f' % (test_loss,self.best_test_loss))
+        return test_loss
 
-    def fit(self, converter_train,best_model_wts, best_loss, converter_test,batch_interval,loader_cols, n_epochs, batch_size,shuffle_row_groups):
+    def fit(self, converter_train, converter_test,batch_interval,loader_cols, n_epochs, batch_size,shuffle_row_groups):
         """Run the model for the training set at dataset.
 
         Parameters:
@@ -340,8 +346,6 @@ class WideDeep(nn.Module):
         - batch_size (int)
         """
         self.w_values_array = np.empty((batch_size,self.num_total_wide_features),dtype = np.float32) # np.array
-        train_loss_history = []
-        test_loss_history = []
 
         # evalate the model at the very beginning
         # self.eval()
@@ -395,10 +399,12 @@ class WideDeep(nn.Module):
                         print('-----')
                         print_time()
                         batches_loss = running_loss_batch/running_total_batch
+                        self.train_loss_history.append(batches_loss)
                         print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
                         running_loss_batch, running_total_batch = 0,0
                         self.eval()
-                        test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
+                        test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+                        self.test_loss_history.append(test_loss)
                         self.train()
                     
             # # ------print out training loss, accuracy for each epoch
@@ -413,4 +419,4 @@ class WideDeep(nn.Module):
             # print_time()
 
 
-        return train_loss_history, test_loss_history, best_loss, best_model_wts
+        return 
