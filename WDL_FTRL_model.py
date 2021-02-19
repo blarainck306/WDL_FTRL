@@ -348,9 +348,10 @@ class WideDeep(nn.Module):
         self.w_values_array = np.empty((batch_size,self.num_total_wide_features),dtype = np.float32) # np.array
 
         # evalate the model at the very beginning
-        # self.eval()
-        # test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss, best_model_wts,loader_cols,batch_size)
-        # test_loss_history.append(test_loss)
+        self.eval()
+        test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+        self.test_loss_history.append(test_loss)
+        self.train()
         
         for epoch in range(n_epochs):
             print('======')
