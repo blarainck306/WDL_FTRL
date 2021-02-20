@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import copy
-import time
+from datetime import datetime
+import pytz
 from math import exp,sqrt
 # import line_profiler
 
@@ -15,9 +16,9 @@ use_cuda = torch.cuda.is_available()
 
 debug_mode = False
 def print_time():
-    t = time.localtime()
-    current_time = time.strftime("%H:%M:%S", t)
-    print(current_time)
+  tz_NY = pytz.timezone('America/New_York') 
+  datetime_NY = datetime.now(tz_NY)
+  print("time:", datetime_NY.strftime("%H:%M:%S"))
     
 class WideDeep(nn.Module):
     """ Wide and Deep model. As explained in Heng-Tze Cheng et al., 2016, the
@@ -128,7 +129,8 @@ class WideDeep(nn.Module):
 
 
     def compile(self, optimizer, alpha, beta, L1, L2):
-        """Wrapper to set the activation, loss and the optimizer.
+        """
+        the optimizer for wide and deep respectively
 
         Parameters:
         ----------
