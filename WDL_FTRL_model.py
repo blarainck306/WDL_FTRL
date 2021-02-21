@@ -76,13 +76,9 @@ class WideDeep(nn.Module):
         # self.num_deep_features = num_deep_features
 
         #-------wide part:
-        # n: squared sum of past gradients
-        # z: weights
-        # w: lazy weights
-        self.n = np.zeros(D, dtype = np.float32)
-        self.z = np.zeros(D, dtype = np.float32)
-        
-
+        self.w = [0.] * D
+        self.decay_times = [0] * D # update decay_times already done for a coordinate when calculating activation
+        self.q = 0 # recording the number of times each weights shold be decay, i.e., number of iterations all weights has been through, every iteration, each weight shold decay
         # ---feature related parameters
         self.D = D
 
@@ -128,7 +124,7 @@ class WideDeep(nn.Module):
         self.best_model_wts = copy.deepcopy(self.state_dict()) # weights that got best log loss on dev set 
 
 
-    def compile(self, optimizer, alpha, beta, L1, L2):
+    def compile(self, optimizer, lr_w,L2_decay):
         """
         the optimizer for wide and deep respectively
 
@@ -138,10 +134,9 @@ class WideDeep(nn.Module):
         optimizer (str): SGD, Adam, or RMSprop
         """
         # ---hyper parameters
-        self.alpha = alpha # learning rate
-        self.beta = beta   # smoothing parameter for adaptive learning rate#
-        self.L1 = L1       # L1 regularization, larger value means more regularized
-        self.L2 = L2       # L2 regularization, larger value means more regularized
+        self.lr_w = lr_w
+        self.L2_decay = L2_decay # L2_decay is proportional to lr according to the formula
+
         
         self.optimizer = optimizer
 
@@ -167,37 +162,28 @@ class WideDeep(nn.Module):
         pass
 
 
-    def forward_wide(self,x_w_indices,j):
+    def forward_wide(self,x_w_indices):
         '''
         doc: this funciton calculate wide_z for a SINGLE data observation
-        x_wide: a list of index of hashed features
-        z_wide (scaler): z from wide side 
+        x_w_indices: a list of index of hashed features
+        z_wide (scaler): z from wide side for a single training sample
         '''
-        # hyper parameters
-        alpha = self.alpha
-        beta = self.beta
-        L1 = self.L1
-        L2 = self.L2
 
-        # model
-        n = self.n
-        z = self.z
+        # wTx is the inner product of w and x
+        wTx = 0.
+        for i in x_w_indices:
+            # weight decay if necessary:
+            self.w[i]  = self.w[i] *((1-self.L2_decay)**(self.q-self.decay_times[i]))
+            # update decay_times records
+            self.decay_times[i] = self.q
+            # sum up for z term of logistic function
+            wTx += self.w[i]
 
-        # ----vectorized implementation for calculating wTx 
-        z_temp = z[x_w_indices]
-        n_temp = n[x_w_indices]
-        sign_temp =np.where(z_temp<0,-1.,1.)
-        w_temp = np.where(sign_temp*z_temp<= L1,0.,(sign_temp * L1 - z_temp) / ((beta + np.sqrt(n_temp)) / alpha + L2))
-        wTx = np.sum(w_temp)
-
-        # cache the current w for update stage
-        self.w_values_array[j,:] = w_temp
-
-        z_wide = max(min(wTx, 35.), -35.)
-        return z_wide
+        # bounded sigmoid function, this is the probability estimation
+        return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
 
 
-    def forward(self, X_w_indices, X_d,y,training = True):
+    def forward(self, X_w_indices, X_d,y_pred,y,training = True):
         """Implementation of the forward pass.
 
         Parameters:
@@ -251,17 +237,17 @@ class WideDeep(nn.Module):
         wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = deep_z.dtype, device = deep_z.device)
         # iterate over training samples within a batch
         for j in range(X_w_indices.shape[0]):
-            wide_z[j] = self.forward_wide(X_w_indices[j,:],j)
+            # forward z prediction:
+            wide_z[j] = self.forward_wide(X_w_indices[j,:])
+            # overall prediction:
+            y_pred[j] = self.activation(wide_z[j] + deep_z[j])
+            # back prop for wide:
+            if training:
+                self.update(X_w_indices[j,:],y_pred[j],y[j]) # update parameters for wide side
 
-        y_pred = self.activation(wide_z + deep_z)
-
-        # iterate within a batch
-        if training:
-            for j in range(X_w_indices.shape[0]):
-                self.update(X_w_indices[j,:],y_pred[j],y[j],j) # update parameters for wide side
         return y_pred
 
-    def update(self,x_wide,y_pred,y,j):
+    def update(self,x_wide,y_pred,y):
         '''
         update necessary states for calculating the gradients of w;
         MODIFIES:
@@ -282,23 +268,24 @@ class WideDeep(nn.Module):
         p = y_pred.item()
         y = y.item()
 
-        # parameter
-        alpha = self.alpha
-
-        # model
-        n = self.n
-        z = self.z
-        # w = self.w_dic_array[j]
-        w = self.w_values_array[j,:]
-
         # gradient under logloss, this is because: if x_i != 0, g = (p-y)x_i= p-y
         g = p - y
 
-        # ---new vectorized implementation: update z and n, for x_i = 0, gradient is zero, so no update for them
-        sigma_temp = (np.sqrt(n[x_wide] + g * g) - np.sqrt(n[x_wide]))/alpha
-        z[x_wide] += (g - sigma_temp * self.w_values_array[j,:])
-        n[x_wide] += g * g
+        #update w:
+        self.q += 1 # everytime we backprop for a training sample, all weights should be decayed for one time
+        for i in x_wide:
+            # update w[i]
+            self.w[i] = (1-self.L2_decay)**(self.q-self.decay_times[i]) *self.w[i] - self.lr_w*g
+            # update decay time for the ith weight
+            self.decay_times[i] = self.q
 
+    def decay_catch_up(self):
+        '''
+        --finish weights decay for all weights on the wide side, this function is called usually in the end of a fitting session to make sure the weights on self.w is up to date
+        '''
+        for i in range(len(self.w)):
+            self.w[i] = (1-self.L2_decay)**(self.q-self.decay_times[i]) *self.w[i]
+        return
 
     def eval_model(self, converter_test,loader_cols, batch_size=32):
         '''
@@ -323,8 +310,10 @@ class WideDeep(nn.Module):
                     if use_cuda:
                         X_d, y = X_d.cuda(), y.cuda()
                     # forward:
-                    y_pred = self(X_w_indices, X_d,y, training = False)# y_pred got updated, passed y_pred as arguments
-                    loss = self.criterion(y_pred, y.view(-1,1))
+                    y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
+                    y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,so differentiable
+                    y_pred = self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y)#y.view(-1,1)
 
                     running_loss += loss.item() * y.size(0)
                     running_num_samples += y.size(0)
@@ -379,8 +368,10 @@ class WideDeep(nn.Module):
 
                     self.optimizer.zero_grad()
                     # ----forward
-                    y_pred = self(X_w_indices, X_d,y)# y_pred got updated, passed y_pred as arguments
-                    loss = self.criterion(y_pred, y.view(-1,1))
+                    y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
+                    y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,so differentiable
+                    y_pred = self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y)#y.view(-1,1)
 
                     # ----backward (calc gradients) for 'deep'
                     loss.backward()
