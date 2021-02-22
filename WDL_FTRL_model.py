@@ -304,10 +304,7 @@ class WideDeep(nn.Module):
             print('======')
             print_time()
             self.train()
-            # for epoch training performance tracking
-            # running_loss = 0
-            # running_total=0
-            
+
             # for batch performance tracking
             running_loss_batch = 0
             running_total_batch=0
@@ -337,11 +334,6 @@ class WideDeep(nn.Module):
                     self.optimizer.step()
                     #--wide: get gradient  and get ready for update for 'WIDE', the actual update for 'wide' is in function forward()
 
-                    #TODO 
-                    # ----record 'running_total','running_correct','running_loss'
-                    # running_total+= y.size(0)
-                    # running_loss += loss.item() *  y.size(0)
-
                     #----print out loss for current batch if it is multiple of batch_interval
                     running_loss_batch += loss.item() *  y.size(0)
                     running_total_batch += y.size(0)
@@ -370,17 +362,4 @@ class WideDeep(nn.Module):
             # test_loss = self.eval_model(converter_test, loader_cols, batch_size)
             # self.test_loss_history.append(test_loss)
             # self.train()
-                    
-            # # ------print out training loss, accuracy for each epoch
-            # epoch_loss = running_loss / running_total
-            # print ('Epoch {} of {}, Training Loss: {}'.format(epoch+1, n_epochs, round(epoch_loss,3)) )
-            # train_loss_history.append(epoch_loss)
-
-            # # ------at each epoch, evaluate the trained model using the test data
-            # self.eval()
-            # test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
-            # test_loss_history.append(test_loss)
-            # print_time()
-
-
         return 
