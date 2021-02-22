@@ -77,6 +77,7 @@ class WideDeep(nn.Module):
 
         #-------wide part:
         self.w = [0.] * D
+        self.b = 0.0
         self.decay_times = [0] * D # update decay_times already done for a coordinate when calculating activation
         self.q = 0 # recording the number of times each weights shold be decay, i.e., number of iterations all weights has been through, every iteration, each weight shold decay
         # ---feature related parameters
@@ -169,18 +170,24 @@ class WideDeep(nn.Module):
         z_wide (scaler): z from wide side for a single training sample
         '''
 
+        decay_times = self.decay_times
+        w = self.w
+        q = self.q
+
         # wTx is the inner product of w and x
         wTx = 0.
         for i in x_w_indices:
             # weight decay if necessary:
-            self.w[i]  = self.w[i] *((1-self.L2_decay)**(self.q-self.decay_times[i]))
+            w[i]  = w[i] *((1-self.L2_decay)**(q-decay_times[i]))
             # update decay_times records
-            self.decay_times[i] = self.q
+            decay_times[i] = q
             # sum up for z term of logistic function
-            wTx += self.w[i]
+            wTx += w[i]
+        # bias from wide side
+        wTx += self.b
+        z_wide = max(min(wTx, 35.), -35.)
+        return z_wide
 
-        # bounded sigmoid function, this is the probability estimation
-        return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
 
 
     def forward(self, X_w_indices, X_d,y_pred,y,training = True):
@@ -245,7 +252,6 @@ class WideDeep(nn.Module):
             if training:
                 self.update(X_w_indices[j,:],y_pred[j],y[j]) # update parameters for wide side
 
-        return y_pred
 
     def update(self,x_wide,y_pred,y):
         '''
@@ -264,6 +270,11 @@ class WideDeep(nn.Module):
         None
         ----------
         '''
+        decay_times = self.decay_times
+        w = self.w
+        q = self.q
+        lr_w = self.lr_w
+
         # convert y_pred,y  to scaler
         p = y_pred.item()
         y = y.item()
@@ -275,9 +286,11 @@ class WideDeep(nn.Module):
         self.q += 1 # everytime we backprop for a training sample, all weights should be decayed for one time
         for i in x_wide:
             # update w[i]
-            self.w[i] = (1-self.L2_decay)**(self.q-self.decay_times[i]) *self.w[i] - self.lr_w*g
+            w[i] = (1-self.L2_decay)**(q-decay_times[i]) * w[i] - lr_w*g
             # update decay time for the ith weight
-            self.decay_times[i] = self.q
+            decay_times[i] = q
+        #update bias:
+        self.b = self.b - lr_w*g
 
     def decay_catch_up(self):
         '''
@@ -285,9 +298,10 @@ class WideDeep(nn.Module):
         '''
         for i in range(len(self.w)):
             self.w[i] = (1-self.L2_decay)**(self.q-self.decay_times[i]) *self.w[i]
+            self.decay_times[i] = self.q
         return
 
-    def eval_model(self, converter_test,loader_cols, batch_size=32):
+    def eval_model(self, converter_test,loader_cols, batch_size):
         '''
         This function is called  after each epoch of training on the training data. 
         This function measure the performance of the model using the dev dataset.
@@ -310,9 +324,9 @@ class WideDeep(nn.Module):
                     if use_cuda:
                         X_d, y = X_d.cuda(), y.cuda()
                     # forward:
-                    y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
-                    y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,so differentiable
-                    y_pred = self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
+                    y_pred = torch.empty(y.shape,dtype = y.dtype,requires_grad = False,device = y.device)
+                    self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
+
                     loss = self.criterion(y_pred, y)#y.view(-1,1)
 
                     running_loss += loss.item() * y.size(0)
@@ -336,7 +350,6 @@ class WideDeep(nn.Module):
         - n_epochs (int)
         - batch_size (int)
         """
-        self.w_values_array = np.empty((batch_size,self.num_total_wide_features),dtype = np.float32) # np.array
 
         # evalate the model at the very beginning
         self.eval()
@@ -370,7 +383,7 @@ class WideDeep(nn.Module):
                     # ----forward
                     y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
                     y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,so differentiable
-                    y_pred = self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
+                    self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
                     loss = self.criterion(y_pred, y)#y.view(-1,1)
 
                     # ----backward (calc gradients) for 'deep'
