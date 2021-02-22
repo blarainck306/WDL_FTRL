@@ -77,35 +77,14 @@ class WideDeep(nn.Module):
 
         #-------wide part:
         self.w = [0.] * D
+        self.b = 0.0
         self.decay_times = [0] * D # update decay_times already done for a coordinate when calculating activation
         self.q = 0 # recording the number of times each weights shold be decay, i.e., number of iterations all weights has been through, every iteration, each weight shold decay
         # ---feature related parameters
         self.D = D
 
-
-        # ----Build the embedding layers:  to be passed through the deep-side
-        for col,val,dim in self.embeddings_input:
-            setattr(self, 'emb_layer_'+col, nn.Embedding(val, dim))
-
-        # ----Build the deep-side hidden layers (with dropout if specified)
-        input_emb_dim = np.sum([emb[2] for emb in self.embeddings_input])
-        # --1st hidden layer, 1st dropout
-        self.linear_0 = nn.Linear(input_emb_dim+len(continuous_cols), self.hidden_layers[0], bias = not  self.batch_norm)
-        if self.batch_norm:
-            self.bn0 = nn.BatchNorm1d(num_features = self.hidden_layers[0])
-        if self.dropout:
-            self.linear_0_drop = nn.Dropout(self.dropout[0])
-
-        # --- following hidden layer, and dropout layers (if specified)
-        for i,h in enumerate(self.hidden_layers[1:],1):
-            setattr(self, 'linear_'+str(i), nn.Linear( self.hidden_layers[i-1], self.hidden_layers[i] , bias = not  self.batch_norm))
-            if self.batch_norm:
-                setattr(self, 'bn_'+str(i), nn.BatchNorm1d(self.hidden_layers[i]))
-            if self.dropout:
-                setattr(self, 'linear_'+str(i)+'_drop', nn.Dropout(self.dropout[i]))
-
-        # PART of FC layer for deep side only, the othre half is with "WIDE", implemented outside Pytorch
-        self.final_partial_fc = nn.Linear(self.hidden_layers[-1], self.n_class)
+        # only one layer for deep side, for learning bias term, input to this layer is going to be zero vector
+        self.final_partial_fc = nn.Linear(1, self.n_class, bias = True)
 
         self.activation, self.criterion = torch.sigmoid, F.binary_cross_entropy # used to use F.sigmoid
 
@@ -169,18 +148,23 @@ class WideDeep(nn.Module):
         z_wide (scaler): z from wide side for a single training sample
         '''
 
+        decay_times = self.decay_times
+        w = self.w
+        q = self.q
+
         # wTx is the inner product of w and x
         wTx = 0.
         for i in x_w_indices:
             # weight decay if necessary:
-            self.w[i]  = self.w[i] *((1-self.L2_decay)**(self.q-self.decay_times[i]))
+            w[i]  = w[i] *((1-self.L2_decay)**(q-decay_times[i]))
             # update decay_times records
-            self.decay_times[i] = self.q
+            decay_times[i] = q
             # sum up for z term of logistic function
-            wTx += self.w[i]
-
-        # bounded sigmoid function, this is the probability estimation
-        return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
+            wTx += w[i]
+        # bias from wide side
+        wTx += self.b
+        z_wide = max(min(wTx, 35.), -35.)
+        return z_wide
 
 
     def forward(self, X_w_indices, X_d,y_pred,y,training = True):
@@ -196,56 +180,21 @@ class WideDeep(nn.Module):
         out (torch.tensor) : result of the output neuron(s)
         """
         # =========Deep Side
-        # ---- get embedding concatenated with continuous features: 'deep_inp'
-        # -- get embeddings for embedding features: emb (a list of embeddings, one embedding for each feature respectively)
-        emb = [getattr(self, 'emb_layer_'+col)(X_d[:,self.deep_column_idx[col]])
-               for col,_,_ in self.embeddings_input]
-       
-        # -- cont is for continuous features
-        if self.continuous_cols:
-            cont_idx = [self.deep_column_idx[col] for col in self.continuous_cols]
-            cont = [X_d[:, cont_idx].float()]
-            deep_inp = torch.cat(emb+cont, 1)
-        else:
-            deep_inp = torch.cat(emb, 1)
-
-        # ---- 1st hidden layer and dropout layers
-        #linear+(batch norm)+ relu
-        if not self.batch_norm:
-            x_deep = F.relu(self.linear_0(deep_inp))
-        else:
-            x_deep = F.relu(self.bn0(self.linear_0(deep_inp)))
-        # dropout
-        if self.dropout:
-            x_deep = self.linear_0_drop(x_deep)
-
-        # ---- following hidden layers and dropout layers
-        for i in range(1,len(self.hidden_layers)):
-            #linear+(batch norm)+ relu
-            if not self.batch_norm:
-                x_deep = F.relu( getattr(self, 'linear_'+str(i))(x_deep) )
-            else:
-                x_deep = F.relu( getattr(self,'bn_'+str(i))(getattr(self, 'linear_'+str(i))(x_deep) ) )
-            # dropout
-            if self.dropout:
-                x_deep = getattr(self, 'linear_'+str(i)+'_drop')(x_deep)
+        # fake_input = torch.zeros((X_w_indices.shape[0],1),requires_grad = False, dtype = torch.float32, device = X_d.device)
+        # deep_z = self.final_partial_fc(fake_input)
 
         # ==========Deep + Wide sides
-        # deep
-        deep_z = self.final_partial_fc(x_deep)
-        # wide
-        wide_z = torch.empty(deep_z.shape, requires_grad = False, dtype = deep_z.dtype, device = deep_z.device)
-        # iterate over training samples within a batch
+        wide_z = torch.empty((X_w_indices.shape[0],1), requires_grad = False, dtype = torch.float32, device = X_d.device)
+        #iterate over training samples within a batch
         for j in range(X_w_indices.shape[0]):
             # forward z prediction:
             wide_z[j] = self.forward_wide(X_w_indices[j,:])
             # overall prediction:
-            y_pred[j] = self.activation(wide_z[j] + deep_z[j])
+            y_pred[j] = self.activation(wide_z[j])
             # back prop for wide:
             if training:
                 self.update(X_w_indices[j,:],y_pred[j],y[j]) # update parameters for wide side
 
-        return y_pred
 
     def update(self,x_wide,y_pred,y):
         '''
@@ -264,6 +213,11 @@ class WideDeep(nn.Module):
         None
         ----------
         '''
+        decay_times = self.decay_times
+        w = self.w
+        q = self.q
+        lr_w = self.lr_w
+
         # convert y_pred,y  to scaler
         p = y_pred.item()
         y = y.item()
@@ -272,12 +226,15 @@ class WideDeep(nn.Module):
         g = p - y
 
         #update w:
-        self.q += 1 # everytime we backprop for a training sample, all weights should be decayed for one time
+        self.q += 1 # everytime we backprop for a training sample, all wide weights should be decayed for one time
         for i in x_wide:
             # update w[i]
-            self.w[i] = (1-self.L2_decay)**(self.q-self.decay_times[i]) *self.w[i] - self.lr_w*g
+            w[i] = (1-self.L2_decay)**(q-decay_times[i]) * w[i] - lr_w*g
             # update decay time for the ith weight
-            self.decay_times[i] = self.q
+            decay_times[i] = q
+        #update bias:
+        self.b = self.b - lr_w*g
+        
 
     def decay_catch_up(self):
         '''
@@ -285,9 +242,10 @@ class WideDeep(nn.Module):
         '''
         for i in range(len(self.w)):
             self.w[i] = (1-self.L2_decay)**(self.q-self.decay_times[i]) *self.w[i]
+            self.decay_times[i] = self.q
         return
 
-    def eval_model(self, converter_test,loader_cols, batch_size=32):
+    def eval_model(self, converter_test,loader_cols, batch_size):
         '''
         This function is called  after each epoch of training on the training data. 
         This function measure the performance of the model using the dev dataset.
@@ -310,9 +268,8 @@ class WideDeep(nn.Module):
                     if use_cuda:
                         X_d, y = X_d.cuda(), y.cuda()
                     # forward:
-                    y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
-                    y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,so differentiable
-                    y_pred = self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
+                    y_pred = torch.empty(y.shape,dtype = y.dtype,requires_grad = False,device = y.device)
+                    self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
                     loss = self.criterion(y_pred, y)#y.view(-1,1)
 
                     running_loss += loss.item() * y.size(0)
@@ -336,7 +293,6 @@ class WideDeep(nn.Module):
         - n_epochs (int)
         - batch_size (int)
         """
-        self.w_values_array = np.empty((batch_size,self.num_total_wide_features),dtype = np.float32) # np.array
 
         # evalate the model at the very beginning
         self.eval()
@@ -370,7 +326,7 @@ class WideDeep(nn.Module):
                     # ----forward
                     y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
                     y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,so differentiable
-                    y_pred = self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
+                    self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
                     loss = self.criterion(y_pred, y)#y.view(-1,1)
 
                     # ----backward (calc gradients) for 'deep'
@@ -389,17 +345,17 @@ class WideDeep(nn.Module):
                     #----print out loss for current batch if it is multiple of batch_interval
                     running_loss_batch += loss.item() *  y.size(0)
                     running_total_batch += y.size(0)
-                    if  i%batch_interval==0 and i!=0:
-                        print('-----')
-                        print_time()
-                        batches_loss = running_loss_batch/running_total_batch
-                        self.train_loss_history.append(batches_loss)
-                        print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
-                        running_loss_batch, running_total_batch = 0,0
-                        self.eval()
-                        test_loss = self.eval_model(converter_test, loader_cols, batch_size)
-                        self.test_loss_history.append(test_loss)
-                        self.train()
+
+            print('-----')
+            print_time()
+            batches_loss = running_loss_batch/running_total_batch
+            self.train_loss_history.append(batches_loss)
+            print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
+            running_loss_batch, running_total_batch = 0,0
+            self.eval()
+            test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+            self.test_loss_history.append(test_loss)
+            self.train()
                     
             # # ------print out training loss, accuracy for each epoch
             # epoch_loss = running_loss / running_total
