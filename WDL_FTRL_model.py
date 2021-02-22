@@ -84,7 +84,7 @@ class WideDeep(nn.Module):
         self.D = D
 
         # only one layer for deep side, for learning bias term, input to this layer is going to be zero vector
-        self.final_partial_fc = nn.Linear(1, self.n_class, bias = True)
+        # self.final_partial_fc = nn.Linear(1, self.n_class, bias = True)
 
         self.activation, self.criterion = torch.sigmoid, F.binary_cross_entropy # used to use F.sigmoid
 
@@ -274,7 +274,7 @@ class WideDeep(nn.Module):
 
                     running_loss += loss.item() * y.size(0)
                     running_num_samples += y.size(0)
-
+                
         # calculating test loss on all dev dataset
         test_loss = running_loss / running_num_samples # avg loss/sample
         # update best test loss so far if necessary
@@ -346,16 +346,30 @@ class WideDeep(nn.Module):
                     running_loss_batch += loss.item() *  y.size(0)
                     running_total_batch += y.size(0)
 
-            print('-----')
-            print_time()
-            batches_loss = running_loss_batch/running_total_batch
-            self.train_loss_history.append(batches_loss)
-            print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
-            running_loss_batch, running_total_batch = 0,0
-            self.eval()
-            test_loss = self.eval_model(converter_test, loader_cols, batch_size)
-            self.test_loss_history.append(test_loss)
-            self.train()
+                    # training performance tracking based on batches...
+                    if  i%batch_interval==0 and i!=0:
+                        print('-----')
+                        print_time()
+                        batches_loss = running_loss_batch/running_total_batch
+                        self.train_loss_history.append(batches_loss)
+                        print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
+                        running_loss_batch, running_total_batch = 0,0
+                        self.eval()
+                        test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+                        self.test_loss_history.append(test_loss)
+                        self.train()
+
+            # training performance tracking based on epochs
+            # print('-----')
+            # print_time()
+            # batches_loss = running_loss_batch/running_total_batch
+            # self.train_loss_history.append(batches_loss)
+            # print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
+            # running_loss_batch, running_total_batch = 0,0
+            # self.eval()
+            # test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+            # self.test_loss_history.append(test_loss)
+            # self.train()
                     
             # # ------print out training loss, accuracy for each epoch
             # epoch_loss = running_loss / running_total
