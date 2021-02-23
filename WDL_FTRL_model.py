@@ -190,7 +190,7 @@ class WideDeep(nn.Module):
 
 
 
-    def forward(self, X_w_indices, X_d,y_pred,y,training = True):
+    def forward(self, X_w_indices, X_d,y,training = True):
         """Implementation of the forward pass.
 
         Parameters:
@@ -243,6 +243,7 @@ class WideDeep(nn.Module):
         # wide
         wide_z = 0
         y_pred = self.activation(wide_z + deep_z)
+        return y_pred
 
 
     def update(self,x_wide,y_pred,y):
@@ -316,10 +317,8 @@ class WideDeep(nn.Module):
                     if use_cuda:
                         X_d, y = X_d.cuda(), y.cuda()
                     # forward:
-                    y_pred = torch.empty(y.shape,dtype = y.dtype,requires_grad = False,device = y.device)
-                    self(X_w_indices, X_d,y_pred,y,training = False)# y_pred got updated, passed y_pred as arguments
-
-                    loss = self.criterion(y_pred, y)#y.view(-1,1)
+                    y_pred = self(X_w_indices, X_d,y,training = False)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y.view(-1,1))#y.view(-1,1)
 
                     running_loss += loss.item() * y.size(0)
                     running_num_samples += y.size(0)
@@ -373,10 +372,8 @@ class WideDeep(nn.Module):
 
                     self.optimizer.zero_grad()
                     # ----forward
-                    y_pred_leaf = torch.empty(y.shape,dtype = y.dtype,requires_grad = True,device = y.device); 
-                    y_pred = y_pred_leaf.clone() # y_pred_leaf is to make y_pred not a leaf variable,so differentiable
-                    self(X_w_indices, X_d,y_pred,y)# y_pred got updated, passed y_pred as arguments
-                    loss = self.criterion(y_pred, y)#y.view(-1,1)
+                    y_pred = self(X_w_indices, X_d,y)# y_pred got updated, passed y_pred as arguments
+                    loss = self.criterion(y_pred, y.view(-1,1))#y.view(-1,1)
 
                     # ----backward (calc gradients) for 'deep'
                     loss.backward()
