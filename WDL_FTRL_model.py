@@ -327,7 +327,8 @@ class WideDeep(nn.Module):
         return test_loss
 
     def fit(self, converter_train, converter_test,batch_interval,loader_cols, n_epochs, batch_size,shuffle_row_groups):
-        """Run the model for the training set at dataset.
+        """
+        Run the model for the training set at dataset.
 
         Parameters:
         ----------
