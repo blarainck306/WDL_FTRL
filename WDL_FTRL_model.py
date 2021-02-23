@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import copy
-import time
+from datetime import datetime
+import pytz
 from math import exp,sqrt
 # import line_profiler
 
@@ -15,9 +16,10 @@ use_cuda = torch.cuda.is_available()
 
 debug_mode = False
 def print_time():
-    t = time.localtime()
-    current_time = time.strftime("%H:%M:%S", t)
-    print(current_time)
+    tz_NY = pytz.timezone('America/New_York') 
+    datetime_NY = datetime.now(tz_NY)
+    print("time:", datetime_NY.strftime("%H:%M:%S"))
+
     
 class WideDeep(nn.Module):
     """ Wide and Deep model. As explained in Heng-Tze Cheng et al., 2016, the
@@ -90,7 +92,21 @@ class WideDeep(nn.Module):
         self.final_partial_fc = nn.Linear(1, self.n_class, bias = True)
 
 
-    def compile(self, optimizer, alpha, beta, L1, L2,method="logistic"):
+    def init_train_history(self):
+        '''
+        initialize object fileds before passing training history to current model object if necessary
+        '''
+        #----training history
+        self.train_loss_history = [] # loss history since the very beginning
+
+        self.test_loss_history = []
+        self.best_test_loss_history = []
+
+        self.best_test_loss = float('inf')
+        self.best_model_wts = copy.deepcopy(self.state_dict()) # weights that got best log loss on dev set 
+
+
+    def compile(self, optimizer, alpha, beta, L1, L2):
         """Wrapper to set the activation, loss and the optimizer.
 
         Parameters:
@@ -104,13 +120,6 @@ class WideDeep(nn.Module):
         self.L1 = L1       # L1 regularization, larger value means more regularized
         self.L2 = L2       # L2 regularization, larger value means more regularized
         
-        if method == 'regression':
-            self.activation, self.criterion = None, F.mse_loss
-        if method == 'logistic': # Avazu
-            self.activation, self.criterion = torch.sigmoid, F.binary_cross_entropy # used to use F.sigmoid
-        if method == 'multiclass':
-            self.activation, self.criterion = F.softmax, F.cross_entropy
-
         self.optimizer = optimizer
 
         # if optimizer == "Adagrad":
@@ -121,8 +130,6 @@ class WideDeep(nn.Module):
         #     self.optimizer = torch.optim.RMSprop(self.parameters(), lr=learning_rate)
         # if optimizer == "SGD":
         #     self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate, momentum=momentum)
-
-        self.method = method
 
     def get_transform_spec(self,loader_cols):
         return TransformSpec(func = None, selected_fields = loader_cols)
@@ -237,7 +244,7 @@ class WideDeep(nn.Module):
         n[x_wide] += g * g
 
 
-    def eval_model(self, converter_test, best_loss,best_model_wts,loader_cols, batch_size=32):
+    def eval_model(self, converter_test,loader_cols, batch_size=32):
         '''
         This function is called  after each epoch of training on the training data. 
         This function measure the performance of the model using the dev dataset.
@@ -246,8 +253,6 @@ class WideDeep(nn.Module):
         - test_loader
         outputs:
         - test_loss: test loss for current epoch
-        - best_loss: best loss so far
-        - best_model_wts: best model weights so far
         '''
         running_loss = 0.0
         running_num_samples = 0.0
@@ -271,13 +276,14 @@ class WideDeep(nn.Module):
         # calculating test loss on all dev dataset
         test_loss = running_loss / running_num_samples # avg loss/sample
         # update best test loss so far if necessary
-        if test_loss < best_loss:
-            best_loss = test_loss
-            best_model_wts = copy.deepcopy(self.state_dict())
-        print('Current test loss: %.4f. So far best test loss: %.4f' % (test_loss,best_loss))
-        return test_loss, best_loss, best_model_wts
+        if test_loss < self.best_test_loss:
+            self.best_test_loss = test_loss
+            self.best_model_wts = copy.deepcopy(self.state_dict())
+        print('Current test loss: %.4f. So far best test loss: %.4f' % (test_loss,self.best_test_loss))
+        return test_loss
 
-    def fit(self, converter_train,best_model_wts, best_loss, converter_test,batch_interval,loader_cols, n_epochs, batch_size,shuffle_row_groups):
+
+    def fit(self, converter_train, converter_test,batch_interval,loader_cols, n_epochs, batch_size,shuffle_row_groups):
         """Run the model for the training set at dataset.
 
         Parameters:
@@ -287,25 +293,21 @@ class WideDeep(nn.Module):
         - batch_size (int)
         """
         self.w_values_array = np.empty((batch_size,self.num_total_wide_features),dtype = np.float32) # np.array
-        train_loss_history = []
-        test_loss_history = []
 
         # evalate the model at the very beginning
-        # self.eval()
-        # test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss, best_model_wts,loader_cols,batch_size)
-        # test_loss_history.append(test_loss)
+        self.eval()
+        test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+        self.test_loss_history.append(test_loss)
+        self.train()
         
         for epoch in range(n_epochs):
             print('======')
             print_time()
             self.train()
-            # for epoch training performance tracking
-            # running_loss = 0
-            # running_total=0
-            
+
             # for batch performance tracking
-            running_loss_batch = 0
-            running_total_batch=0
+            running_loss_batch = 0.0
+            running_total_batch = 0.0
 
             # petastorm loader: note rows of data will be expressed as a dictionary, with column names as the keys
             with converter_train.make_torch_dataloader(batch_size = batch_size, transform_spec = self.get_transform_spec(loader_cols),num_epochs = 1,shuffle_row_groups = shuffle_row_groups, workers_count = 2) as train_loader:
@@ -330,10 +332,6 @@ class WideDeep(nn.Module):
                     self.optimizer.step()
                     #--wide: get gradient  and get ready for update for 'WIDE', the actual update for 'wide' is in function forward()
 
-                    #TODO 
-                    # ----record 'running_total','running_correct','running_loss'
-                    # running_total+= y.size(0)
-                    # running_loss += loss.item() *  y.size(0)
 
                     #----print out loss for current batch if it is multiple of batch_interval
                     running_loss_batch += loss.item() *  y.size(0)
@@ -342,22 +340,24 @@ class WideDeep(nn.Module):
                         print('-----')
                         print_time()
                         batches_loss = running_loss_batch/running_total_batch
+                        self.train_loss_history.append(batches_loss)
                         print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
-                        running_loss_batch, running_total_batch = 0,0
+                        running_loss_batch, running_total_batch = 0.0, 0.0
                         self.eval()
-                        test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
+                        test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+                        self.test_loss_history.append(test_loss)
                         self.train()
-                    
-            # # ------print out training loss, accuracy for each epoch
-            # epoch_loss = running_loss / running_total
-            # print ('Epoch {} of {}, Training Loss: {}'.format(epoch+1, n_epochs, round(epoch_loss,3)) )
-            # train_loss_history.append(epoch_loss)
 
-            # # ------at each epoch, evaluate the trained model using the test data
-            # self.eval()
-            # test_loss, best_loss, best_model_wts = self.eval_model(converter_test, best_loss,best_model_wts, loader_cols, batch_size)
-            # test_loss_history.append(test_loss)
+            # print('-----')
             # print_time()
+            # batches_loss = running_loss_batch/running_total_batch
+            # self.train_loss_history.append(batches_loss)
+            # print("batch {}, avg training loss {} per sample within batches".format(i,round(batches_loss,3)) )
+            # running_loss_batch, running_total_batch = 0.0, 0.0
+            # self.eval()
+            # test_loss = self.eval_model(converter_test, loader_cols, batch_size)
+            # self.test_loss_history.append(test_loss)
+            # self.train()
+                
 
-
-        return train_loss_history, test_loss_history, best_loss, best_model_wts
+        return
