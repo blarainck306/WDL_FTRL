@@ -342,7 +342,7 @@ class WideDeep(nn.Module):
         self.eval()
         test_loss = self.eval_model(converter_test, loader_cols, batch_size)
         self.test_loss_history.append(test_loss)
-        test_loss_history.append(test_loss)
+        self.train()
         
         for epoch in range(n_epochs):
             print('======')
