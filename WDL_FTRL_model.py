@@ -90,6 +90,7 @@ class WideDeep(nn.Module):
 
         # only one layer for deep side, for learning bias term, input to this layer is going to be zero vector
         self.final_partial_fc = nn.Linear(1, self.n_class, bias = True)
+        self.activation, self.criterion = torch.sigmoid, F.binary_cross_entropy # used to use F.sigmoid
 
 
     def init_train_history(self):
