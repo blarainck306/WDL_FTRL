@@ -126,6 +126,9 @@ class WideDeep(nn.Module):
 
         self.best_test_loss = float('inf')
         self.best_model_wts = copy.deepcopy(self.state_dict()) # weights that got best log loss on dev set 
+        self.n_best = None
+        self.z_best = None
+
 
 
     def compile(self, optimizer, alpha, beta, L1, L2):
@@ -335,6 +338,8 @@ class WideDeep(nn.Module):
         if test_loss < self.best_test_loss:
             self.best_test_loss = test_loss
             self.best_model_wts = copy.deepcopy(self.state_dict())
+            self.n_best = self.n
+            self.z_best = self.z
         print('Current test loss: %.4f. So far best test loss: %.4f' % (test_loss,self.best_test_loss))
         return test_loss
 
