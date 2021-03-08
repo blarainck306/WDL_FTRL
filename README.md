@@ -26,7 +26,7 @@ This scirpt is built on  top of [this Github repository](https://github.com/zenw
 ## Files
 - WDL_FTRL_model.py: Wide & Deep Learning in Pytorch with addiontal customized functionality introduced above. 
 - utility.py: utlity functions used by the project to be introduced in the next setion. 
-- 4_OGD_L2Wide_Combine_addRegu.ipynb: an demo showing the training of a wide & deep model applied to CTR. For the complete scripts, please refer to this [report](4_OGD_L2Wide_Combine_addRegu.ipynb).
+- 4_OGD_L2Wide_Combine_addRegu.ipynb: an demo showing the training of a wide & deep model applied to CTR. For the complete scripts, please refer to this [report](https://docs.google.com/document/d/1bQNWil_nIA_X1sCEoWekLO7SbP3kt6H10hy3DrLovSw/edit?usp=sharing).
 
 
 
