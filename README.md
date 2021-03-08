@@ -23,6 +23,13 @@ This scirpt is built on  top of [this Github repository](https://github.com/zenw
   - FTRL_deepOnly: deep model, almost the same as OGD_deepOnly, it's here for the easiness of combing both wide and deep models in joint training.
   - FTRL_wideDeep: joint training
 
+## Files
+- WDL_FTRL_model.py: Wide & Deep Learning in Pytorch with addiontal customized functionality introduced above. 
+- utility.py: utlity functions used by the project to be introduced in the next setion. 
+- 4_OGD_L2Wide_Combine_addRegu.ipynb: an demo showing the training of a wide & deep model applied to CTR. For the complete scripts, please refer to this [report](4_OGD_L2Wide_Combine_addRegu.ipynb).
+
+
+
 ## Wide & Deep Learning applied to CTR
 A project for Click-through rate (CTR) prediction using this model is introduced in [this Google Doc](https://docs.google.com/document/d/1bQNWil_nIA_X1sCEoWekLO7SbP3kt6H10hy3DrLovSw/edit?pli=1#).
 The colab IPython notebooks for analysis, data processing, and model training are in [Google Drive](https://drive.google.com/drive/folders/1zc4k-YZDNHmzNihtHZOjdBArLwfL-DO8?usp=sharing).
